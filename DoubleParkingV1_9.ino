@@ -1,0 +1,340 @@
+#include <LiquidCrystal.h>
+#include <Servo.h>
+#include <DHT.h>
+#include <EEPROM.h>
+
+#define DHTPIN A0
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+float temp = 0;
+
+const int rs = 10, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+Servo direction;
+
+const int green = 6, yellow = 7, red = 8;
+const int buzzer = 9;
+long duration;
+int distance;
+
+int repitition = 0;
+double repTime = 3; // in minutes
+
+//A2 is Profile 1 (Left Button)
+//A3 is Profile 2 (Right Button)
+
+int P1 = 0;
+int P2 = 0;
+int points;
+long perfLeft = 19.0;
+long perfRight = 127.0;
+const long tempDiff = 0.5;
+
+const int leftAngle = 105;
+const int rightAngle = 165;
+
+bool active = false;
+bool revActive = false;
+int finalDist;
+const int detectionDist = 150;
+bool left = false;
+bool right = false;
+int side = 1; // 1 is left, 2 is right
+int consistency = 0;
+int timeout = 0;
+int timeoutMax = 1; // in minutes
+
+int checkDist() {
+  digitalWrite(12, LOW);
+  delayMicroseconds(2);
+  digitalWrite(12, HIGH);
+  delayMicroseconds(12);
+  digitalWrite(12, LOW);
+  duration = pulseIn(13, HIGH);
+  distance = duration * 0.034 / 2;
+  return distance;
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  dht.begin();
+  direction.attach(A1, 600, 2300);
+  direction.write(0);
+  lcd.begin(16, 2);
+  pinMode(A2, INPUT_PULLUP);
+  pinMode(A3, INPUT_PULLUP);
+  pinMode(buzzer, OUTPUT);
+  pinMode(green, OUTPUT);
+  pinMode(yellow, OUTPUT);
+  pinMode(red, OUTPUT);
+  pinMode(12, OUTPUT);
+  pinMode(13, INPUT);
+
+  EEPROM.get(0, P1);
+  if (P1 > 999) {
+    P1 = 0;
+    EEPROM.put(0, P1);
+  }
+  EEPROM.get(3, P2);
+  if (P2 > 999) {
+    P2 = 0;
+    EEPROM.put(3, P2);
+  }
+}
+
+void loop() {
+  // put your main code here, to run repeatedly: 
+  if (!revActive) {
+    if (digitalRead(A2) == LOW) {
+      if (left) {
+        left = false;
+        delay(1000);
+      } else {
+        left = true;
+        delay(1000);
+      }
+    }
+    if (digitalRead(A3) == LOW) {
+      if (right) {
+        right = false;
+        delay(1500);
+      } else {
+        right = true;
+        delay(1500);
+      }
+    }
+    float newTemp = dht.readTemperature(true);
+
+    if (!active) {
+      if ((newTemp - temp) > tempDiff) {
+        direction.write(leftAngle); // Look left
+        delay(1500);
+        checkDist();
+        if (distance <= detectionDist && !left) {
+          side = 1;
+          active = true;
+        } else {
+          direction.write(rightAngle); // Otherwise look right
+          delay(1500);
+          checkDist();
+          if (distance <= detectionDist && !right) {
+            side = 2;
+            active = true;
+          }
+          if (distance > 70) {
+            right = false;
+          }
+        }
+        if (distance > 70) {
+          left = false;
+        }
+      }
+      temp = newTemp;
+    }
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    if (active) {
+      lcd.print("Distance: ");
+      lcd.print(distance);
+      lcd.print("cm");
+    } else {
+      lcd.print(newTemp);
+      lcd.write(223); //Degree symbol
+      lcd.print("F");
+    }
+    if (!active) {
+      lcd.setCursor(9, 0);
+      if (left && right) {
+        lcd.print("Full");
+      } else if (left) {
+        lcd.print("Left");
+      } else if (right) {
+        lcd.print("Right");
+      } else {
+        lcd.print("Empty");
+      }
+      lcd.setCursor(0, 1);
+      lcd.print("P1: ");
+      lcd.print(P1);
+      lcd.setCursor(8, 1);
+      lcd.print("P2: ");
+      lcd.print(P2);
+    }
+
+    digitalWrite(red, LOW);
+    digitalWrite(yellow, LOW);
+    digitalWrite(green, LOW);
+
+    if (active) {
+      checkDist();
+      lcd.setCursor(0, 1);
+      if (side == 1) {
+        lcd.print("Parking Left");
+        //LEFT SPOT SETTINGS
+        if (distance <= 100) {
+        digitalWrite(green, HIGH);
+        delay(200);
+        digitalWrite(buzzer, HIGH);
+        delay(50);
+        digitalWrite(buzzer, LOW);
+        consistency = 0;
+        } else if (distance > 100 && distance <= 140) {
+          digitalWrite(yellow, HIGH);
+          delay(200);
+          digitalWrite(buzzer, HIGH);
+          delay(50);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance > 140 && distance <= 155) {
+          digitalWrite(red, HIGH);
+          consistency = consistency + 1;
+          if (consistency > 20) {
+            if (direction.read() == leftAngle) {
+              left = true;
+              active = false;
+              revActive = true;
+              finalDist = distance;
+            } else if (direction.read() == rightAngle) {
+              right = true;
+              active = false;
+              revActive = true;
+              finalDist = distance;
+            }
+            consistency = 0;
+          }
+        } else if (distance > 155 && distance <= 170) {
+          digitalWrite(yellow, HIGH);
+          delay(500);
+          digitalWrite(buzzer, HIGH);
+          delay(250);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance > 70 && distance < detectionDist) {
+          digitalWrite(green, HIGH);
+          delay(250);
+          digitalWrite(buzzer, HIGH);
+          delay(250);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance >= detectionDist) {
+          digitalWrite(red, LOW);
+          digitalWrite(yellow, LOW);
+          digitalWrite(green, LOW);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+          active = false;
+        }
+      }
+      if (side == 2) {
+        lcd.print("Parking Right");
+        //RIGHT SPOT SETTINGS
+        if (distance <= 100) {
+        digitalWrite(green, HIGH);
+        delay(200);
+        digitalWrite(buzzer, HIGH);
+        delay(50);
+        digitalWrite(buzzer, LOW);
+        consistency = 0;
+        } else if (distance > 100 && distance <= 120) {
+          digitalWrite(yellow, HIGH);
+          delay(200);
+          digitalWrite(buzzer, HIGH);
+          delay(50);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance > 120 && distance <= 130) {
+          digitalWrite(red, HIGH);
+          consistency = consistency + 1;
+          if (consistency > 20) {
+            if (direction.read() == 90) {
+              left = true;
+              active = false;
+              revActive = true;
+              finalDist = distance;
+            } else if (direction.read() == 180) {
+              right = true;
+              active = false;
+              revActive = true;
+              finalDist = distance;
+            }
+            consistency = 0;
+          }
+        } else if (distance > 130 && distance <= 150) {
+          digitalWrite(yellow, HIGH);
+          delay(500);
+          digitalWrite(buzzer, HIGH);
+          delay(250);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance > 150 && distance < detectionDist) {
+          digitalWrite(green, HIGH);
+          delay(250);
+          digitalWrite(buzzer, HIGH);
+          delay(250);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+        } else if (distance >= detectionDist) {
+          digitalWrite(red, LOW);
+          digitalWrite(yellow, LOW);
+          digitalWrite(green, LOW);
+          digitalWrite(buzzer, LOW);
+          consistency = 0;
+          active = false;
+        }
+      }
+    }
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Off by ");
+    if (side == 1) {
+      lcd.print(abs(perfLeft - finalDist));
+      lcd.print("cm");
+      lcd.setCursor(0, 1);
+      lcd.print("Choose Profile");
+    } else if (side == 2) {
+      lcd.print(abs(perfRight - finalDist));
+      lcd.print("cm");
+      lcd.setCursor(0, 1);
+      lcd.print("Choose Profile");
+    }
+    if (digitalRead(A2) == LOW) {
+      points = abs(perfLeft - finalDist);
+      P1 = P1 + points;
+      EEPROM.put(0, P1);
+      points = 0;
+      revActive = false;
+      timeout = 0;
+    } else if (digitalRead(A3) == LOW) {
+      points = abs(perfRight - finalDist);
+      P2 = P2 + points;
+      EEPROM.put(3, P2);
+      points = 0;
+      revActive = false;
+      timeout = 0;
+    }
+    if (digitalRead(A2) == LOW && digitalRead(A3) == LOW) {
+      P1 = 0;
+      EEPROM.put(0, P1);
+      P2 = 0;
+      EEPROM.put(3, P2);
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Resetting...");
+      delay(3000);
+    }
+    timeout = timeout + 1;
+    // if no button is clicked after parking, ignore the scoring system after a minute.
+    if (timeout >= ((timeoutMax * 60) * 4)) {
+      revActive = false;
+    }
+  }
+  repitition = repitition + 1;
+  if (repitition >= ((repTime * 60) * 4) && !revActive) {
+    temp = 0;
+    repitition = 0;
+  }
+  delay(250);
+}
